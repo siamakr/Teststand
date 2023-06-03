@@ -1,8 +1,5 @@
 
-#include <Arduino.h>
 #include "Teststand.h"
-#include <stdlib.h>
-
 Teststand::Teststand()
 {
 
@@ -13,20 +10,28 @@ void Teststand::init()
     Wire.begin();
     delay(500);
     //Wire.setClock(400000); //Qwiic Scale is capable of running at 400kHz if desired
-    init_edf();
-    initScale();
-    
+    //init_edf();
+
+
+    act.init_edf();
+    initScale();    
 
 }
 
+// void Teststand::init_edf()
+// {
+//     Serial.println("Teststand init started...");
+//     edf.attach(EDF_PIN);
+//     delay(200);
+//     //make sure esc is off
+//     wedf(900);
+//     delay(300);
+//     Serial.println("edf ready");
+// }
 void Teststand::init_edf()
 {
     Serial.println("Teststand init started...");
-    edf.attach(EDF_PIN,1000,2000);
-    delay(200);
-    //make sure esc is off
-    wedf(900);
-    delay(300);
+    act.init_edf();
     Serial.println("edf ready");
 }
 
@@ -111,7 +116,10 @@ void Teststand::user_input_loop(void)
                 Serial.println("Testing done... Going into wait mode...");
                 incoming = 'w';
             break;
-            
+
+            case 'r':
+                regression_verification_loop(750, 20.00f, 1.00f, 31.00f);
+            break;
             case 'g':   //takes single measurement from scale 
                 Serial.print("gweight_avg: ");
                 Serial.println(get_weight_avg()); 
@@ -140,6 +148,7 @@ void Teststand::user_input_loop(void)
             
             case 't':     //tare scale
                 myScale.calculateZeroOffset();
+                Serial.println(myScale.getZeroOffset());
             break;
             
             case 'c':     //calibrate scale
@@ -192,11 +201,11 @@ void Teststand::edf_test_loop(int& delaytime_ms, int& num_steps, int& start_us, 
     float timestamp{0};
     
     //Prime EDF for 5 seconds as per ESC guidlines
-    prime_edf(5);
+    act.prime_edf(5);
     //Start the test bed loop
     Serial.print(num_of_iterations);
     Serial.print(",");
-    Serial.print(delaytime_ms);
+    Serial.print(num_steps);
     Serial.print(",");
     Serial.print(start_us);
     Serial.print(",");
@@ -209,7 +218,7 @@ void Teststand::edf_test_loop(int& delaytime_ms, int& num_steps, int& start_us, 
         
         timestamp = millis() - start_timer;
         //wedf_hold(command, delaytime_ms);
-        wedf(command);
+        act.writeEDF(command);
         delay(delaytime_ms);
         currentGrams = get_weight_avg_2();
 
@@ -226,7 +235,7 @@ void Teststand::edf_test_loop(int& delaytime_ms, int& num_steps, int& start_us, 
         Serial.print(",");
         Serial.print(currentGrams,5);
         Serial.print(",");
-        Serial.print(timestamp/1000.00f);
+        Serial.print((timestamp/1000.00f), 5);
         // Serial.print(",");
         // Serial.print(force_newtons[i], 5);
         Serial.println("");
@@ -238,11 +247,49 @@ void Teststand::edf_test_loop(int& delaytime_ms, int& num_steps, int& start_us, 
     //resets the test and stops the motor
 
       command = 1000;
-      wedf(command);
+      act.writeEDF(command);
 
 
 }
 
+void Teststand::regression_verification_loop(float step_time_ms, float start_thrust, float thrust_per_step, float end_thrust)
+{
+    //initialize desired thrust from regression to start value 
+    float desired_thrust{start_thrust};
+    float currentGrams;
+    //prime EDF and send start thrust value 
+    act.prime_edf(5000);
+    act.writeEDF(desired_thrust);
+    //store current loop timer to keep track of while loops
+    float loop_timer{millis()};
+
+    //Begin testing loop
+    while(desired_thrust < end_thrust)
+    {
+        while((millis() - loop_timer) <= step_time_ms)
+        {
+            currentGrams = get_weight_avg_2();
+
+            Serial.print(act.ad.pwmedf);
+            Serial.print(",");
+            Serial.print((currentGrams * 9.807 / 1000), 5);
+            Serial.print(",");
+            Serial.print(desired_thrust,5);
+            // Serial.print(",");
+            // Serial.print(force_newtons[i], 5);
+            Serial.println("");
+        }
+        //increment thrust to next step 
+        desired_thrust += thrust_per_step;
+        act.writeEDF((float) desired_thrust);
+        
+        //update loop timer before next thrust step 
+        loop_timer = millis();
+        
+    }
+
+    act.edf_shutdown();
+}
 
 //gets weight reading from scale and takes an average of
 //AVG_SIZE many readings 
